@@ -13,8 +13,8 @@
 
 ```bash
 pip install glide
-export ANTHROPIC_API_KEY=sk-ant-...
-glide start
+glide start                                        # Max plan users: no key needed
+export ANTHROPIC_API_KEY=sk-ant-...               # API key users: set this first
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
 ```
 
@@ -87,7 +87,9 @@ No restarts. No config changes. No intervention.
 pip install glide
 
 # 2. Start the proxy
+# API key users:
 export ANTHROPIC_API_KEY=sk-ant-...
+# Max plan / OAuth users: skip the above — glide passes your session auth through
 glide start
 
 # Output:
@@ -152,7 +154,7 @@ All config via environment variables or `.env` file:
 
 | Variable | Default | Description |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | required | Your Anthropic API key |
+| `ANTHROPIC_API_KEY` | optional | API key users only — Max plan / OAuth users omit this |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Upstream endpoint |
 | `OLLAMA_URL` | `http://localhost:11434` | Local Ollama instance |
 | `CASCADE_JSON` | see defaults | Custom cascade as a JSON array |

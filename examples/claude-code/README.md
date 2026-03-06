@@ -5,7 +5,12 @@
 ```bash
 pip install glide
 
+# API key users:
 export ANTHROPIC_API_KEY=sk-ant-...
+
+# Max plan / OAuth users: skip the line above
+# glide passes your Claude Code session auth through automatically
+
 glide start
 # Proxy listening on http://127.0.0.1:8743
 ```
