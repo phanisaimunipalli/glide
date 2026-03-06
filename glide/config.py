@@ -51,8 +51,8 @@ class ModelConfig:
 
 
 DEFAULT_CASCADE = [
-    ModelConfig(provider="anthropic", model="claude-opus-4-6",   ttft_budget=4.0,  ttt_budget=15.0),
-    ModelConfig(provider="anthropic", model="claude-sonnet-4-6", ttft_budget=5.0,  ttt_budget=20.0),
+    ModelConfig(provider="anthropic", model="claude-opus-4-6",   ttft_budget=4.0,  ttt_budget=10.0),
+    ModelConfig(provider="anthropic", model="claude-sonnet-4-6", ttft_budget=5.0,  ttt_budget=10.0),
     ModelConfig(provider="anthropic", model="claude-haiku-4-5",  ttft_budget=3.0,  ttt_budget=None),
     ModelConfig(provider="ollama",    model="qwen2.5:14b",        ttft_budget=None, ttt_budget=None),
 ]
