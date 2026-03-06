@@ -65,6 +65,7 @@ async def status():
                 "provider": m.provider,
                 "model": m.model,
                 "ttft_budget": m.ttft_budget,
+                "ttt_budget": m.ttt_budget,
                 "latency": registry.get(m.model).stats(),
             }
             for m in cascade

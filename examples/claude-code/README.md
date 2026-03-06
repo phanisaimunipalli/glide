@@ -4,20 +4,31 @@
 
 ```bash
 pip install glide
-
-# API key users:
-export ANTHROPIC_API_KEY=sk-ant-...
-
-# Max plan / OAuth users: skip the line above
-# glide passes your Claude Code session auth through automatically
-
-glide start
-# Proxy listening on http://127.0.0.1:8743
 ```
 
+**Max / Pro plan (no API key needed):**
 ```bash
+glide start
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
-claude  # Claude Code now uses the cascade
+claude
+```
+
+**API key:**
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+glide start
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
+claude
+```
+
+**Persist across sessions** — add to `~/.zshrc`:
+```bash
+echo 'export ANTHROPIC_BASE_URL=http://127.0.0.1:8743' >> ~/.zshrc
+```
+
+**Check live cascade status:**
+```bash
+glide status
 ```
 
 ## What happens on a slow response

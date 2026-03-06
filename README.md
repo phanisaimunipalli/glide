@@ -82,34 +82,75 @@ No restarts. No config changes. No intervention.
 
 ## Quick start
 
-**Prerequisites:** Python 3.9+, [Ollama](https://ollama.ai) with a model pulled
+**Prerequisites:** Python 3.9+
 
 ```bash
-# 1. Install
 pip install glide
-
-# 2. Start the proxy
-# API key users:
-export ANTHROPIC_API_KEY=sk-ant-...
-# Max plan / OAuth users: skip the above — glide passes your session auth through
-glide start
-
-# Output:
-# ============================================================
-#   🪂 glide proxy started
-#   Listening : http://127.0.0.1:8743
-#   Cascade   :
-#     1. anthropic/claude-opus-4-6    (TTFT: 4s, TTT: 10s)
-#     2. anthropic/claude-sonnet-4-6  (TTFT: 5s, TTT: 10s)
-#     3. anthropic/claude-haiku-4-5   (TTFT: 3s)
-#     4. ollama/qwen2.5:14b           (no limit)
-# ============================================================
-
-# 3. Point your agent at glide
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
 ```
 
-Works with **Claude Code**, **Cursor**, or any tool using the Anthropic Messages API **or OpenAI Chat Completions API**.
+### Claude Code — Max / Pro plan (no API key needed)
+
+```bash
+glide start
+# Proxy running on http://127.0.0.1:8743
+
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
+claude
+```
+
+To persist across terminal sessions, add to your `~/.zshrc` (or `~/.bashrc`):
+
+```bash
+echo 'export ANTHROPIC_BASE_URL=http://127.0.0.1:8743' >> ~/.zshrc
+```
+
+### Claude Code — API key
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+glide start
+
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
+claude
+```
+
+### code_puppy
+
+```bash
+glide start
+```
+
+Add to your code_puppy model config:
+
+```json
+{
+  "model_type": "custom_anthropic",
+  "model_name": "claude-opus-4-6",
+  "base_url": "http://127.0.0.1:8743"
+}
+```
+
+### Check what's happening
+
+```bash
+glide status
+```
+
+```
+glide  http://127.0.0.1:8743
+auth   Passthrough mode — Pro/Max/OAuth auth forwarded from client
+
+#   provider/model                         TTFT budget  TTT budget   p95 TTFT   p95 TTT
+------------------------------------------------------------------------------------------
+1   anthropic/claude-opus-4-6                      4s         10s    11.20s    no data
+2   anthropic/claude-sonnet-4-6                    5s         10s     1.80s    no data
+3   anthropic/claude-haiku-4-5                     3s          —     no data    no data
+4   ollama/qwen2.5:14b                        no limit          —     no data    no data
+```
+
+> **Ollama is optional.** If you don't have it, glide skips that tier automatically and the cascade still works across the Anthropic models.
+
+Works with **Claude Code**, **Cursor**, **code_puppy**, or any tool using the Anthropic Messages API or OpenAI Chat Completions API.
 
 ---
 
