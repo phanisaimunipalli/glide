@@ -10,11 +10,10 @@ from .proxy import app
 def main():
     if not settings.anthropic_api_key:
         print(
-            "Error: ANTHROPIC_API_KEY is not set.\n"
-            "  export ANTHROPIC_API_KEY=sk-ant-...",
+            "Note: ANTHROPIC_API_KEY not set — auth will be passed through "
+            "from your client. Max plan / OAuth users are supported.",
             file=sys.stderr,
         )
-        sys.exit(1)
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level.upper(), logging.INFO),

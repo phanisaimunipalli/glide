@@ -94,7 +94,12 @@ async def passthrough(request: Request, path: str, body_bytes: bytes):
         k: v for k, v in request.headers.items()
         if k.lower() not in ("host", "content-length", "transfer-encoding")
     }
-    headers["x-api-key"] = settings.anthropic_api_key
+    # Pass through original auth (x-api-key or Authorization).
+    # Supports API key users and Max plan users (OAuth session auth).
+    # Only inject ANTHROPIC_API_KEY as fallback if no auth is present.
+    has_auth = "x-api-key" in headers or "authorization" in headers
+    if not has_auth and settings.anthropic_api_key:
+        headers["x-api-key"] = settings.anthropic_api_key
     url = f"{settings.anthropic_base_url}/{path}"
     async with httpx.AsyncClient(timeout=60.0) as client:
         resp = await client.request(request.method, url, content=body_bytes, headers=headers)

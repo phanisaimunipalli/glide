@@ -118,14 +118,25 @@ async def _try_model_stream(
 async def _stream_anthropic(
     model_cfg: ModelConfig,
     body: dict,
+    request_headers: dict = None,
 ) -> AsyncIterator[bytes]:
     patched_body = {**body, "model": model_cfg.model, "stream": True}
+
+    # Preserve original auth from the incoming request.
+    # Supports API key users AND Max plan users (OAuth session auth).
+    # Only inject ANTHROPIC_API_KEY as fallback if no auth header is present.
     headers = {
-        "x-api-key": settings.anthropic_api_key,
+        k: v for k, v in (request_headers or {}).items()
+        if k.lower() not in ("host", "content-length", "transfer-encoding")
+    }
+    headers.update({
         "anthropic-version": "2023-06-01",
         "content-type": "application/json",
         "accept": "text/event-stream",
-    }
+    })
+    has_auth = "x-api-key" in headers or "authorization" in headers
+    if not has_auth and settings.anthropic_api_key:
+        headers["x-api-key"] = settings.anthropic_api_key
 
     tracker = registry.get(model_cfg.model)
 
