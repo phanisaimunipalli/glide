@@ -2,10 +2,17 @@
 Model cascade orchestrator.
 
 Tries each model in the configured cascade in order. For each model:
-  1. Check if p95 TTFT already exceeds budget (proactive skip)
-  2. Send the request and measure time-to-first-token
+  1. Check if p95 TTFT or p95 TTT already exceeds budget (proactive skip)
+  2. Send the request and measure time-to-first-token (TTFT)
   3. If TTFT exceeds budget → record, skip to next model
-  4. If request succeeds → record TTFT, stream response
+  4. If model has extended thinking, parse SSE events and measure TTT
+  5. If TTT exceeds ttt_budget → record, abort stream, skip to next model
+  6. If request succeeds → record TTFT + TTT, stream response
+
+TTFT = time to first byte. Catches slow starts and connection issues.
+TTT  = time from request start until the first *text* content block begins,
+       i.e. after any thinking/reasoning tokens complete. Only fires for
+       models with extended thinking. For regular models TTT is never tracked.
 
 The cascade ends when:
   - A model responds within budget (success), or
@@ -42,8 +49,42 @@ class TTFTTimeoutError(Exception):
     pass
 
 
+class TTTTimeoutError(Exception):
+    pass
+
+
 class AllModelsFailedError(Exception):
     pass
+
+
+def _parse_sse_buffer(buf: bytes) -> tuple:
+    """
+    Parse complete SSE events from a byte buffer.
+    Returns (events, remaining_buf) where events is a list of
+    {'event': str, 'data': dict} and remaining_buf is any trailing
+    incomplete event data.
+    """
+    events = []
+    text = buf.decode("utf-8", errors="replace")
+    parts = text.split("\n\n")
+    for block in parts[:-1]:
+        block = block.strip()
+        if not block:
+            continue
+        event_type = None
+        event_data = None
+        for line in block.splitlines():
+            if line.startswith("event: "):
+                event_type = line[7:].strip()
+            elif line.startswith("data: "):
+                try:
+                    event_data = json.loads(line[6:])
+                except (json.JSONDecodeError, ValueError):
+                    pass
+        if event_type:
+            events.append({"event": event_type, "data": event_data or {}})
+    remaining = parts[-1].encode("utf-8") if parts[-1] else b""
+    return events, remaining
 
 
 async def _first_token_timeout(
@@ -84,11 +125,17 @@ async def cascade_stream(
     for model_cfg in cascade:
         tracker = registry.get(model_cfg.model)
 
-        # Proactive skip: if p95 already exceeds budget, don't bother
+        # Proactive skip: if p95 TTFT or p95 TTT already exceeds budget
         if tracker.should_skip(model_cfg.ttft_budget):
             logger.info(
                 f"[cascade] Skipping {model_cfg.model} "
-                f"(p95={tracker.p95():.2f}s > budget={model_cfg.ttft_budget}s)"
+                f"(p95_ttft={tracker.p95():.2f}s > budget={model_cfg.ttft_budget}s)"
+            )
+            continue
+        if tracker.should_skip_ttt(model_cfg.ttt_budget):
+            logger.info(
+                f"[cascade] Skipping {model_cfg.model} "
+                f"(p95_ttt={tracker.ttt_p95():.2f}s > ttt_budget={model_cfg.ttt_budget}s)"
             )
             continue
 
@@ -106,7 +153,14 @@ async def cascade_stream(
             logger.warning(
                 f"[cascade] {model_cfg.model} exceeded TTFT budget — trying next"
             )
-            tracker.record(model_cfg.ttft_budget or 999.0)
+            tracker.record_ttft(model_cfg.ttft_budget or 999.0)
+            continue
+
+        except TTTTimeoutError:
+            logger.warning(
+                f"[cascade] {model_cfg.model} exceeded TTT budget (thinking too long) — trying next"
+            )
+            tracker.record_ttt(model_cfg.ttt_budget or 999.0)
             continue
 
         except (httpx.ConnectError, httpx.RemoteProtocolError) as e:
@@ -161,6 +215,7 @@ async def _stream_anthropic(
         headers["x-api-key"] = settings.anthropic_api_key
 
     tracker = registry.get(model_cfg.model)
+    request_start = time.monotonic()
 
     async with httpx.AsyncClient(timeout=None) as client:
         async with client.stream(
@@ -176,17 +231,64 @@ async def _stream_anthropic(
 
             byte_iter = resp.aiter_bytes()
 
-            # Race first chunk against TTFT budget
+            # Phase 1: TTFT — race first byte against budget
             first_chunk, ttft = await _first_token_timeout(byte_iter, model_cfg.ttft_budget)
-            tracker.record(ttft)
+            tracker.record_ttft(ttft)
             logger.info(
                 f"[cascade] {model_cfg.model} TTFT={ttft:.2f}s "
                 f"(budget={model_cfg.ttft_budget}s) — streaming"
             )
 
             yield first_chunk
+
+            # Phase 2: TTT — parse SSE events to detect thinking→text transition.
+            # We maintain a byte buffer, consume complete events, and track state:
+            #   no_thinking  → model doesn't use thinking; TTT never fires
+            #   in_thinking  → thinking block active; enforce ttt_budget
+            #   text_started → text block started; record TTT, stop monitoring
+            _buf = b""
+            _in_thinking = False
+            _ttt_done = False
+
             async for chunk in byte_iter:
                 yield chunk
+
+                if _ttt_done or model_cfg.ttt_budget is None:
+                    continue
+
+                _buf += chunk
+                _buf_events, _buf = _parse_sse_buffer(_buf)
+
+                for evt in _buf_events:
+                    if evt["event"] != "content_block_start":
+                        continue
+                    cb_type = evt["data"].get("content_block", {}).get("type", "")
+                    if cb_type == "thinking":
+                        _in_thinking = True
+                    elif cb_type == "text":
+                        if _in_thinking:
+                            # Thinking phase is over; measure total thinking time
+                            ttt = time.monotonic() - request_start
+                            tracker.record_ttt(ttt)
+                            logger.info(
+                                f"[cascade] {model_cfg.model} TTT={ttt:.2f}s "
+                                f"(budget={model_cfg.ttt_budget}s)"
+                            )
+                            if ttt > model_cfg.ttt_budget:
+                                raise TTTTimeoutError(
+                                    f"{model_cfg.model} TTT {ttt:.2f}s "
+                                    f"exceeded {model_cfg.ttt_budget}s budget"
+                                )
+                        _ttt_done = True
+
+                # Still thinking — check elapsed against budget
+                if _in_thinking and not _ttt_done:
+                    elapsed = time.monotonic() - request_start
+                    if elapsed > model_cfg.ttt_budget:
+                        raise TTTTimeoutError(
+                            f"{model_cfg.model} still thinking at {elapsed:.2f}s, "
+                            f"budget={model_cfg.ttt_budget}s"
+                        )
 
 
 async def _stream_openai(

@@ -2,7 +2,15 @@
 Configuration for glide.
 
 The cascade is an ordered list of models. glide tries them in order,
-moving to the next if the current exceeds its TTFT budget.
+moving to the next if the current exceeds its TTFT or TTT budget.
+
+Two latency budgets per model:
+  ttft_budget — time-to-first-token: abort if no bytes arrive within N seconds.
+                Catches cold starts, connection issues, overloaded endpoints.
+  ttt_budget  — time-to-think: abort if thinking/reasoning exceeds N seconds
+                before the first real text token appears.
+                Only fires for models with extended thinking (opus, o1, etc.).
+                For regular models, this signal is never triggered.
 
 Supported providers:
   anthropic  — Anthropic Messages API (claude-*)
@@ -11,18 +19,18 @@ Supported providers:
   ollama     — Local Ollama instance (any model)
 
 Default cascade:
-  claude-opus-4-6   (4s budget)  → best quality, try first
-  claude-sonnet-4-6 (5s budget)  → faster, good quality
-  claude-haiku-4-5  (3s budget)  → fastest Anthropic model
-  qwen2.5:14b       (no timeout) → local Ollama, always available
+  claude-opus-4-6   (ttft=4s, ttt=15s) → best quality, try first
+  claude-sonnet-4-6 (ttft=5s, ttt=20s) → faster, good quality
+  claude-haiku-4-5  (ttft=3s, ttt=None) → fastest Anthropic, no thinking
+  qwen2.5:14b       (no timeout)        → local Ollama, always available
 
 Override via CASCADE_JSON env var to add OpenAI/Gemini/custom models.
 Example:
   CASCADE_JSON='[
-    {"provider":"anthropic","model":"claude-opus-4-6","ttft_budget":4.0},
-    {"provider":"openai","model":"gpt-4o","ttft_budget":5.0},
-    {"provider":"google","model":"gemini-2.0-flash","ttft_budget":3.0},
-    {"provider":"ollama","model":"qwen2.5:14b","ttft_budget":null}
+    {"provider":"anthropic","model":"claude-opus-4-6","ttft_budget":4.0,"ttt_budget":15.0},
+    {"provider":"openai","model":"gpt-4o","ttft_budget":5.0,"ttt_budget":null},
+    {"provider":"google","model":"gemini-2.0-flash","ttft_budget":3.0,"ttt_budget":null},
+    {"provider":"ollama","model":"qwen2.5:14b","ttft_budget":null,"ttt_budget":null}
   ]'
 """
 
@@ -36,16 +44,17 @@ from pydantic_settings import BaseSettings
 
 @dataclass
 class ModelConfig:
-    provider: str          # "anthropic", "openai", "google", or "ollama"
-    model: str             # model identifier
-    ttft_budget: Optional[float] = None  # seconds; None = no timeout
+    provider: str                        # "anthropic", "openai", "google", or "ollama"
+    model: str                           # model identifier
+    ttft_budget: Optional[float] = None  # seconds to first byte; None = no timeout
+    ttt_budget: Optional[float] = None   # seconds until first text token (post-thinking); None = no timeout
 
 
 DEFAULT_CASCADE = [
-    ModelConfig(provider="anthropic", model="claude-opus-4-6",   ttft_budget=4.0),
-    ModelConfig(provider="anthropic", model="claude-sonnet-4-6", ttft_budget=5.0),
-    ModelConfig(provider="anthropic", model="claude-haiku-4-5",  ttft_budget=3.0),
-    ModelConfig(provider="ollama",    model="qwen2.5:14b",        ttft_budget=None),
+    ModelConfig(provider="anthropic", model="claude-opus-4-6",   ttft_budget=4.0,  ttt_budget=15.0),
+    ModelConfig(provider="anthropic", model="claude-sonnet-4-6", ttft_budget=5.0,  ttt_budget=20.0),
+    ModelConfig(provider="anthropic", model="claude-haiku-4-5",  ttft_budget=3.0,  ttt_budget=None),
+    ModelConfig(provider="ollama",    model="qwen2.5:14b",        ttft_budget=None, ttt_budget=None),
 ]
 
 

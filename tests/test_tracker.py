@@ -75,8 +75,12 @@ def test_stats_structure(tracker):
     for t in [1.0, 2.0, 3.0, 4.0, 5.0]:
         tracker.record(t)
     s = tracker.stats()
-    assert s["samples"] == 5
-    assert s["p95"] is not None
-    assert s["mean"] == 3.0
-    assert s["min"] == 1.0
-    assert s["max"] == 5.0
+    # stats() now returns {"ttft": {...}, "ttt": {...}}
+    assert s["ttft"]["samples"] == 5
+    assert s["ttft"]["p95"] is not None
+    assert s["ttft"]["mean"] == 3.0
+    assert s["ttft"]["min"] == 1.0
+    assert s["ttft"]["max"] == 5.0
+    # ttt has no samples yet
+    assert s["ttt"]["samples"] == 0
+    assert s["ttt"]["p95"] is None

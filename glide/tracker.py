@@ -1,11 +1,16 @@
 """
 Per-model latency tracker.
 
-Maintains a rolling window of observed TTFT (time-to-first-token) values
-for each model and computes the p95 latency.
+Tracks two signals per model:
+  TTFT — time-to-first-token: time until first byte arrives from the model.
+          Used to detect slow starts and connection issues.
+  TTT  — time-to-think: time from request start until the first *text* token
+          appears, i.e. after any thinking/reasoning block completes.
+          Only meaningful for models with extended thinking (opus, o1, etc.).
+          For models without thinking, TTT == TTFT.
 
-Used for proactive routing: if a model's p95 TTFT is already above its
-budget, skip it rather than waiting for it to timeout again.
+Both use a rolling window of recent samples to compute p95. Proactive routing
+skips a model if its p95 TTFT already exceeds the configured budget.
 """
 
 import logging
@@ -18,22 +23,33 @@ logger = logging.getLogger("glide.tracker")
 
 
 class ModelLatencyTracker:
-    """Tracks TTFT samples for a single model."""
+    """Tracks TTFT and TTT samples for a single model."""
 
     def __init__(self, window_size: int = 20):
-        self._window: deque = deque(maxlen=window_size)
+        self._ttft: deque = deque(maxlen=window_size)
+        self._ttt: deque = deque(maxlen=window_size)
+
+    # ------------------------------------------------------------------
+    # Record
 
     def record(self, ttft: float):
-        self._window.append(ttft)
-        logger.debug(f"Recorded TTFT {ttft:.2f}s (window={len(self._window)})")
+        """Backward-compatible alias for record_ttft."""
+        self.record_ttft(ttft)
+
+    def record_ttft(self, v: float):
+        self._ttft.append(v)
+        logger.debug(f"Recorded TTFT {v:.2f}s (window={len(self._ttft)})")
+
+    def record_ttt(self, v: float):
+        self._ttt.append(v)
+        logger.debug(f"Recorded TTT  {v:.2f}s (window={len(self._ttt)})")
+
+    # ------------------------------------------------------------------
+    # TTFT stats
 
     def p95(self) -> Optional[float]:
         """Returns p95 TTFT, or None if fewer than 5 samples."""
-        if len(self._window) < 5:
-            return None
-        sorted_w = sorted(self._window)
-        idx = int(len(sorted_w) * 0.95)
-        return sorted_w[min(idx, len(sorted_w) - 1)]
+        return _p95(self._ttft)
 
     def should_skip(self, ttft_budget: Optional[float]) -> bool:
         """
@@ -47,25 +63,69 @@ class ModelLatencyTracker:
             return False
         skip = p > ttft_budget
         if skip:
-            logger.info(f"Proactive skip — p95={p:.2f}s > budget={ttft_budget}s")
+            logger.info(f"Proactive skip — p95_ttft={p:.2f}s > budget={ttft_budget}s")
         return skip
+
+    # ------------------------------------------------------------------
+    # TTT stats
+
+    def ttt_p95(self) -> Optional[float]:
+        """Returns p95 TTT, or None if fewer than 5 samples."""
+        return _p95(self._ttt)
+
+    def should_skip_ttt(self, ttt_budget: Optional[float]) -> bool:
+        """
+        Returns True if this model's p95 TTT exceeds the ttt_budget.
+        Used for proactive routing when thinking is consistently too slow.
+        """
+        if not settings.proactive_skip or ttt_budget is None:
+            return False
+        p = self.ttt_p95()
+        if p is None:
+            return False
+        skip = p > ttt_budget
+        if skip:
+            logger.info(f"Proactive skip — p95_ttt={p:.2f}s > ttt_budget={ttt_budget}s")
+        return skip
+
+    # ------------------------------------------------------------------
 
     @property
     def sample_count(self) -> int:
-        return len(self._window)
+        return len(self._ttft)
 
     def stats(self) -> dict:
-        if not self._window:
-            return {"samples": 0, "p95": None, "mean": None}
-        sorted_w = sorted(self._window)
         return {
-            "samples": len(self._window),
-            "p95": self.p95(),
-            "mean": round(sum(self._window) / len(self._window), 3),
-            "min": round(sorted_w[0], 3),
-            "max": round(sorted_w[-1], 3),
+            "ttft": _window_stats(self._ttft, self.p95()),
+            "ttt":  _window_stats(self._ttt,  self.ttt_p95()),
         }
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+
+def _p95(window: deque) -> Optional[float]:
+    if len(window) < 5:
+        return None
+    sorted_w = sorted(window)
+    idx = int(len(sorted_w) * 0.95)
+    return sorted_w[min(idx, len(sorted_w) - 1)]
+
+
+def _window_stats(window: deque, p95_val: Optional[float]) -> dict:
+    if not window:
+        return {"samples": 0, "p95": None, "mean": None}
+    sorted_w = sorted(window)
+    return {
+        "samples": len(window),
+        "p95": p95_val,
+        "mean": round(sum(window) / len(window), 3),
+        "min": round(sorted_w[0], 3),
+        "max": round(sorted_w[-1], 3),
+    }
+
+
+# ---------------------------------------------------------------------------
 
 class TrackerRegistry:
     """Global registry of per-model trackers."""
