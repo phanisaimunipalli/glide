@@ -4,7 +4,7 @@ Tests for cascade orchestration logic.
 
 import asyncio
 import pytest
-from llm_relay.cascade import TTFTTimeoutError, _first_token_timeout
+from glide.cascade import TTFTTimeoutError, _first_token_timeout
 
 
 # -- TTFT timeout helper --

@@ -10,7 +10,7 @@ from typing import AsyncIterator
 
 import httpx
 
-logger = logging.getLogger("llm_relay.translator")
+logger = logging.getLogger("glide.translator")
 
 
 def anthropic_to_ollama(body: dict, ollama_model: str) -> dict:

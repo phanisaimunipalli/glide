@@ -1,7 +1,7 @@
 """
-Configuration for llm-relay.
+Configuration for glide.
 
-The cascade is an ordered list of models. llm-relay tries them in order,
+The cascade is an ordered list of models. glide tries them in order,
 moving to the next if the current exceeds its TTFT budget.
 
 Default cascade:

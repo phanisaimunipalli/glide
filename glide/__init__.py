@@ -1,5 +1,5 @@
 """
-llm-relay: Latency-aware model cascade for agentic LLM workflows.
+glide: Latency-aware model cascade for agentic LLM workflows.
 
 Automatically switches to the next model in the cascade when the current
 model exceeds its time-to-first-token (TTFT) budget.

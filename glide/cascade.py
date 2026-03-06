@@ -25,7 +25,7 @@ from .config import ModelConfig, settings
 from .tracker import registry
 from .translator import anthropic_to_ollama, stream_ollama_as_anthropic
 
-logger = logging.getLogger("llm_relay.cascade")
+logger = logging.getLogger("glide.cascade")
 
 
 class TTFTTimeoutError(Exception):

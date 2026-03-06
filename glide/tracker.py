@@ -14,7 +14,7 @@ from typing import Dict, Optional
 
 from .config import settings
 
-logger = logging.getLogger("llm_relay.tracker")
+logger = logging.getLogger("glide.tracker")
 
 
 class ModelLatencyTracker:

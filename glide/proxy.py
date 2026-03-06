@@ -1,5 +1,5 @@
 """
-FastAPI proxy server for llm-relay.
+FastAPI proxy server for glide.
 
 Intercepts /v1/messages and runs it through the model cascade.
 All other paths pass through to Anthropic unchanged.
@@ -17,14 +17,14 @@ from .cascade import AllModelsFailedError, cascade_stream
 from .config import settings
 from .tracker import registry
 
-logger = logging.getLogger("llm_relay.proxy")
+logger = logging.getLogger("glide.proxy")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cascade = settings.get_cascade()
     logger.info("=" * 60)
-    logger.info("  llm-relay proxy started")
+    logger.info("  glide proxy started")
     logger.info(f"  Listening : http://{settings.proxy_host}:{settings.proxy_port}")
     logger.info(f"  Cascade   :")
     for i, m in enumerate(cascade):
@@ -34,10 +34,10 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="llm-relay", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="glide", version="0.1.0", lifespan=lifespan)
 
 
-@app.get("/_llm_relay/status")
+@app.get("/_glide/status")
 async def status():
     """Inspect cascade configuration and per-model latency stats."""
     cascade = settings.get_cascade()
@@ -69,7 +69,7 @@ async def proxy(request: Request, path: str):
                 headers={
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",
-                    "X-LLM-Relay": "true",
+                    "X-Glide": "true",
                 },
             )
         except AllModelsFailedError:

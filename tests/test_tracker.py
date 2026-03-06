@@ -3,7 +3,7 @@ Tests for the per-model latency tracker.
 """
 
 import pytest
-from llm_relay.tracker import ModelLatencyTracker
+from glide.tracker import ModelLatencyTracker
 
 
 @pytest.fixture

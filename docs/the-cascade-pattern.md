@@ -115,7 +115,7 @@ The challenge is that HTTP streaming requests are long-lived. To implement TTFT 
 This requires careful resource cleanup to avoid connection leaks.
 
 ### Quality degradation signaling
-When the cascade falls back to a lower-tier model, the client should know. llm-relay includes the `X-LLM-Relay-Model` response header indicating which model actually served the request.
+When the cascade falls back to a lower-tier model, the client should know. glide includes the `X-LLM-Relay-Model` response header indicating which model actually served the request.
 
 ### Cascade depth
 A deeper cascade (more models) provides more resilience but increases worst-case latency. Practical deployments should cap the cascade at 3–4 tiers, with local Ollama as the terminal fallback.
@@ -133,7 +133,7 @@ Together, the LLM Circuit Breaker Pattern and the LLM Request Cascade Pattern fo
 └─────────────────┬───────────────────────┘
                   │
 ┌─────────────────▼───────────────────────┐
-│           llm-relay                     │
+│           glide                     │
 │   LLM Request Cascade Pattern           │
 │   (latency-aware model routing)         │
 └─────────────────┬───────────────────────┘

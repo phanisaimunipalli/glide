@@ -1,8 +1,8 @@
-# Contributing to llm-relay
+# Contributing to glide
 
 ```bash
-git clone https://github.com/phanisaimunipalli/llm-relay
-cd llm-relay
+git clone https://github.com/phanisaimunipalli/glide
+cd glide
 pip install -e ".[dev]"
 pytest tests/ -v
 ```

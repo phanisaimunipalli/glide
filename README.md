@@ -1,85 +1,118 @@
-# llm-relay
+<div align="center">
 
-**Latency-aware model cascade for agentic LLM workflows.**
-Automatically switches to a faster model when your preferred model is too slow — before you timeout.
+# 🪂 glide
 
-[![PyPI version](https://img.shields.io/pypi/v/llm-relay.svg)](https://pypi.org/project/llm-relay/)
-[![Python](https://img.shields.io/pypi/pyversions/llm-relay.svg)](https://pypi.org/project/llm-relay/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+### Latency-aware model cascade for agentic LLM workflows.
+
+**Auto-switches to a faster model when yours is slow — before you ever timeout.**
+
+[![PyPI version](https://img.shields.io/pypi/v/glide.svg?style=flat-square)](https://pypi.org/project/glide/)
+[![Python](https://img.shields.io/pypi/pyversions/glide.svg?style=flat-square)](https://pypi.org/project/glide/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
+[![Tests](https://img.shields.io/badge/tests-13%20passing-brightgreen?style=flat-square)]()
+
+```bash
+pip install glide
+export ANTHROPIC_API_KEY=sk-ant-...
+glide start
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
+```
+
+*That's the entire setup.*
+
+</div>
 
 ---
 
 ## The problem
 
-Claude Opus is the best model for complex coding tasks. But under load, it can take 12–15 seconds to return its first word. For a developer mid-task in an AI coding agent, this feels identical to a crash.
+Claude Opus is the best model for complex coding tasks. But under load, it can take **12–15 seconds** to return its first word. For a developer mid-task in an AI coding agent, this feels identical to a crash.
 
-Current solutions: wait it out, or manually switch models.
-
-**llm-relay fixes this automatically.**
-
----
-
-## What it does
-
-llm-relay is a transparent proxy implementing the **LLM Request Cascade Pattern** — a new latency-aware routing strategy for agentic AI workflows.
-
-It maintains an ordered cascade of models with per-model **time-to-first-token (TTFT) budgets**. When a model exceeds its budget, llm-relay aborts the request early and retries on the next model — delivering a response within your latency budget instead of timing out.
-
-```
-Default cascade:
-  1. claude-opus-4-6    → 8s TTFT budget  (best quality)
-  2. claude-sonnet-4-6  → 5s TTFT budget  (faster)
-  3. claude-haiku-4-5   → 3s TTFT budget  (fastest)
-  4. qwen2.5:14b        → no limit        (local Ollama, always works)
-```
-
----
-
-## Quick start
-
-```bash
-pip install llm-relay
-
-export ANTHROPIC_API_KEY=sk-ant-...
-llm-relay start
-
-# Point Claude Code at the proxy
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
-```
-
-That's it. llm-relay handles the rest.
+> *Without glide: wait 15 seconds, or manually switch models.*
+> *With glide: response arrives in ~2 seconds, automatically.*
 
 ---
 
 ## How it works
 
-```
-Request → Try opus (8s budget)
-              │
-         First token in 2s? → stream full response ✓
-         First token in 10s? → abort, try sonnet
-                                   │
-                              First token in 1.5s? → stream ✓
-```
-
-### Proactive routing (the smart part)
-
-llm-relay tracks a rolling window of observed TTFT values per model and computes **p95 latency** continuously. If a model's p95 already exceeds its budget, it is **skipped without waiting**.
+glide runs as a transparent proxy between your AI agent and the Anthropic API. It maintains a cascade of models, each with a **time-to-first-token (TTFT) budget**. When a model is too slow, glide aborts early and tries the next one — before you experience the timeout.
 
 ```
-Normal day:    opus (p95=2s)  → serves most requests
-Peak load:     opus (p95=11s) → skipped, sonnet serves instead
-Recovery:      opus (p95=3s)  → resumes serving
+┌─────────────────────────────────────────────────────────┐
+│                    🪂 glide proxy                        │
+│                                                         │
+│  Request → claude-opus    (budget: 8s)                  │
+│               │                                         │
+│            slow? ──yes──► claude-sonnet (budget: 5s)   │
+│                                │                        │
+│                             slow? ──yes──► claude-haiku │
+│                                                │        │
+│                                             slow? ──►  │
+│                                          qwen2.5:14b   │
+│                                        (local Ollama)  │
+└─────────────────────────────────────────────────────────┘
 ```
 
-You don't wait for opus to timeout again — the proxy learned it's slow and routes around it proactively.
+### The smart part: proactive routing
+
+glide tracks a **rolling p95 TTFT** per model. If opus is consistently slow, glide skips it without waiting — routing directly to sonnet before the timeout even starts.
+
+```
+Normal day    → opus p95=2s   → serves requests in ~2s
+Peak load     → opus p95=11s  → skipped, sonnet serves in ~1.5s
+Recovery      → opus p95=3s   → resumes automatically
+```
+
+No restarts. No config changes. No intervention.
 
 ---
 
-## Inspect the cascade
+## Default cascade
+
+| # | Model | TTFT Budget | Role |
+|---|---|---|---|
+| 1 | `claude-opus-4-6` | 8s | Best quality, tried first |
+| 2 | `claude-sonnet-4-6` | 5s | Fast + high quality |
+| 3 | `claude-haiku-4-5` | 3s | Fastest Anthropic model |
+| 4 | `qwen2.5:14b` (Ollama) | no limit | Local fallback, always works |
+
+---
+
+## Quick start
+
+**Prerequisites:** Python 3.9+, [Ollama](https://ollama.ai) with a model pulled
 
 ```bash
-curl http://127.0.0.1:8743/_llm_relay/status
+# 1. Install
+pip install glide
+
+# 2. Start the proxy
+export ANTHROPIC_API_KEY=sk-ant-...
+glide start
+
+# Output:
+# ============================================================
+#   🪂 glide proxy started
+#   Listening : http://127.0.0.1:8743
+#   Cascade   :
+#     1. anthropic/claude-opus-4-6    (TTFT budget: 8s)
+#     2. anthropic/claude-sonnet-4-6  (TTFT budget: 5s)
+#     3. anthropic/claude-haiku-4-5   (TTFT budget: 3s)
+#     4. ollama/qwen2.5:14b           (TTFT budget: no limit)
+# ============================================================
+
+# 3. Point your agent at glide
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
+```
+
+Works with **Claude Code**, **Cursor**, or any tool using the Anthropic Messages API.
+
+---
+
+## Live status
+
+```bash
+curl http://127.0.0.1:8743/_glide/status | python -m json.tool
 ```
 
 ```json
@@ -94,24 +127,38 @@ curl http://127.0.0.1:8743/_llm_relay/status
       "model": "claude-sonnet-4-6",
       "ttft_budget": 5.0,
       "latency": { "samples": 14, "p95": 2.1, "mean": 1.7, "min": 0.8, "max": 3.2 }
+    },
+    {
+      "model": "claude-haiku-4-5",
+      "ttft_budget": 3.0,
+      "latency": { "samples": 3, "p95": 1.1, "mean": 1.0, "min": 0.9, "max": 1.1 }
+    },
+    {
+      "model": "qwen2.5:14b",
+      "ttft_budget": null,
+      "latency": { "samples": 0, "p95": null, "mean": null }
     }
   ]
 }
 ```
 
+Responses served through a fallback model include the header `X-Glide-Model: claude-sonnet-4-6`.
+
 ---
 
 ## Configuration
+
+All config via environment variables or `.env` file:
 
 | Variable | Default | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | required | Your Anthropic API key |
 | `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Upstream endpoint |
 | `OLLAMA_URL` | `http://localhost:11434` | Local Ollama instance |
-| `CASCADE_JSON` | see defaults | Custom cascade as JSON array |
+| `CASCADE_JSON` | see defaults | Custom cascade as a JSON array |
 | `PROACTIVE_SKIP` | `true` | Skip models whose p95 > budget |
 | `TRACKER_WINDOW` | `20` | Rolling window size for p95 |
-| `PROXY_PORT` | `8743` | Port the proxy listens on |
+| `PROXY_PORT` | `8743` | Port glide listens on |
 
 ### Custom cascade
 
@@ -121,57 +168,62 @@ export CASCADE_JSON='[
   {"provider": "anthropic", "model": "claude-haiku-4-5",  "ttft_budget": 2.0},
   {"provider": "ollama",    "model": "qwen2.5:14b",        "ttft_budget": null}
 ]'
+glide start
 ```
 
 ---
 
-## The pattern
+## The pattern behind glide
 
-This project introduces the **LLM Request Cascade Pattern** — a new reliability primitive that applies latency-aware routing to the specific semantics of LLM APIs: streaming token output, time-to-first-token as a health signal, and heterogeneous model quality tiers.
+glide introduces the **LLM Request Cascade Pattern** — a new reliability primitive that applies latency-aware routing to the specific semantics of LLM APIs: streaming token output, time-to-first-token as a health signal, and heterogeneous model quality tiers.
 
-Read the full pattern documentation: [`docs/the-cascade-pattern.md`](docs/the-cascade-pattern.md)
+Unlike standard retry logic (re-tries the same model) or load balancing (distributes across identical instances), the LLM Request Cascade routes across **heterogeneous model tiers** using observed p95 latency to make real-time routing decisions.
 
----
-
-## The Agentic Reliability Stack
-
-Use llm-relay with [llm-circuit](https://github.com/phanisaimunipalli/llm-circuit) for complete coverage:
-
-```
-Claude Code
-    │
-llm-relay    ← handles slowness (latency cascade)
-    │
-llm-circuit  ← handles outages (circuit breaker)
-    │
- ┌──┴──┐
-API  Ollama
-```
-
-- llm-relay catches slow responses and routes to faster models
-- llm-circuit catches full outages and routes to local Ollama
-- Together: your AI coding agent keeps working through anything
+Read the full pattern documentation → [`docs/the-cascade-pattern.md`](docs/the-cascade-pattern.md)
 
 ---
 
-## Comparison
+## Use with llm-circuit for full resilience
 
-| Tool | What it does | Latency-aware? | Proactive routing? |
+glide handles **slowness**. [llm-circuit](https://github.com/phanisaimunipalli/llm-circuit) handles **outages**. Use both together:
+
+```
+Your AI Agent
+     │
+  🪂 glide          ← slow response? cascade to faster model
+     │
+  ⚡ llm-circuit    ← full outage? switch to local Ollama
+     │
+ ┌───┴────┐
+API     Ollama
+```
+
+Together they form the **Agentic Reliability Stack** — your AI coding agent keeps working through anything.
+
+---
+
+## What makes this different
+
+| | LiteLLM | llm-circuit | 🪂 glide |
 |---|---|---|---|
-| LiteLLM | Multi-provider routing | No | No |
-| llm-circuit | Outage circuit breaker | No | No |
-| **llm-relay** | TTFT-budget cascade | **Yes** | **Yes** |
+| Outage failover | ✓ (manual) | ✓ (auto) | ✓ (via cascade) |
+| Latency-aware routing | ✗ | ✗ | ✓ |
+| TTFT budget enforcement | ✗ | ✗ | ✓ |
+| Proactive p95 routing | ✗ | ✗ | ✓ |
+| Zero config change | ✗ | ✓ | ✓ |
 
 ---
 
 ## Development
 
 ```bash
-git clone https://github.com/phanisaimunipalli/llm-relay
-cd llm-relay
+git clone https://github.com/phanisaimunipalli/glide
+cd glide
 pip install -e ".[dev]"
-pytest tests/ -v
+pytest tests/ -v   # 13 tests, all passing
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for areas where help is needed.
 
 ---
 
@@ -183,7 +235,19 @@ MIT — see [LICENSE](LICENSE).
 
 ## Citation
 
+If you reference the LLM Request Cascade Pattern in research or writing:
+
 ```
-Munipalli, Phani Sai Ram. "llm-relay: LLM Request Cascade Pattern for Agentic Workflows."
-GitHub, 2026. https://github.com/phanisaimunipalli/llm-relay
+Munipalli, Phani Sai Ram. "glide: LLM Request Cascade Pattern for Agentic Workflows."
+GitHub, 2026. https://github.com/phanisaimunipalli/glide
 ```
+
+---
+
+<div align="center">
+
+Built for developers who can't afford to wait.
+
+**[⭐ Star on GitHub](https://github.com/phanisaimunipalli/glide)** · **[📖 Pattern Docs](docs/the-cascade-pattern.md)** · **[🐛 Issues](https://github.com/phanisaimunipalli/glide/issues)**
+
+</div>
