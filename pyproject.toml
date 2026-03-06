@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "llm-relay"
+version = "0.1.0"
+description = "Latency-aware model cascade for agentic LLM workflows — auto-switch to faster models on slow responses"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+keywords = ["llm", "claude", "anthropic", "ollama", "cascade", "latency", "ttft", "proxy", "ai-agents", "failover"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: Proxy Servers",
+]
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "httpx>=0.25.0",
+    "pydantic-settings>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21", "httpx"]
+
+[project.scripts]
+llm-relay = "llm_relay.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/phanisaimunipalli/llm-relay"
+Documentation = "https://github.com/phanisaimunipalli/llm-relay#readme"
+Issues = "https://github.com/phanisaimunipalli/llm-relay/issues"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
