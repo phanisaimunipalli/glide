@@ -5,7 +5,7 @@ The cascade is an ordered list of models. glide tries them in order,
 moving to the next if the current exceeds its TTFT budget.
 
 Default cascade:
-  claude-opus-4-6   (8s budget)  → best quality, try first
+  claude-opus-4-6   (4s budget)  → best quality, try first
   claude-sonnet-4-6 (5s budget)  → faster, good quality
   claude-haiku-4-5  (3s budget)  → fastest Anthropic model
   qwen2.5:14b       (no timeout) → local Ollama, always available
@@ -27,7 +27,7 @@ class ModelConfig:
 
 
 DEFAULT_CASCADE = [
-    ModelConfig(provider="anthropic", model="claude-opus-4-6",   ttft_budget=8.0),
+    ModelConfig(provider="anthropic", model="claude-opus-4-6",   ttft_budget=4.0),
     ModelConfig(provider="anthropic", model="claude-sonnet-4-6", ttft_budget=5.0),
     ModelConfig(provider="anthropic", model="claude-haiku-4-5",  ttft_budget=3.0),
     ModelConfig(provider="ollama",    model="qwen2.5:14b",        ttft_budget=None),
