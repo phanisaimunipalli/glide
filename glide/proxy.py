@@ -41,7 +41,15 @@ app = FastAPI(title="glide", version="0.1.0", lifespan=lifespan)
 async def status():
     """Inspect cascade configuration and per-model latency stats."""
     cascade = settings.get_cascade()
+    env_key_set = bool(settings.anthropic_api_key)
     return {
+        "auth": {
+            "env_api_key_set": env_key_set,
+            "note": (
+                "API key mode (env)" if env_key_set
+                else "Passthrough mode — Pro/Max/OAuth auth forwarded from client"
+            ),
+        },
         "cascade": [
             {
                 "provider": m.provider,
@@ -50,7 +58,7 @@ async def status():
                 "latency": registry.get(m.model).stats(),
             }
             for m in cascade
-        ]
+        ],
     }
 
 
@@ -62,14 +70,22 @@ async def proxy(request: Request, path: str):
         body = json.loads(body_bytes) if body_bytes else {}
         cascade = settings.get_cascade()
 
+        # Extract and forward original request headers (auth passthrough).
+        # Supports: API key (x-api-key), Pro/Max plan (Authorization: Bearer),
+        # or ANTHROPIC_API_KEY env fallback.
+        request_headers = _extract_headers(request)
+        auth_mode = _detect_auth_mode(request_headers)
+        logger.info(f"[proxy] auth={auth_mode}")
+
         try:
             return StreamingResponse(
-                cascade_stream(body, cascade),
+                cascade_stream(body, cascade, request_headers),
                 media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",
                     "X-Glide": "true",
+                    "X-Glide-Auth": auth_mode,
                 },
             )
         except AllModelsFailedError:
@@ -87,6 +103,28 @@ async def proxy(request: Request, path: str):
             )
 
     return await passthrough(request, path, body_bytes)
+
+
+def _extract_headers(request: Request) -> dict:
+    """Strip hop-by-hop headers, keep everything else including auth."""
+    return {
+        k: v for k, v in request.headers.items()
+        if k.lower() not in ("host", "content-length", "transfer-encoding")
+    }
+
+
+def _detect_auth_mode(headers: dict) -> str:
+    """Detect which auth mode the client is using."""
+    if "x-api-key" in headers:
+        return "api-key"
+    if "authorization" in headers:
+        auth = headers["authorization"].lower()
+        if auth.startswith("bearer"):
+            return "oauth-bearer"
+        return "authorization"
+    if settings.anthropic_api_key:
+        return "env-api-key"
+    return "none"
 
 
 async def passthrough(request: Request, path: str, body_bytes: bytes):

@@ -56,10 +56,17 @@ async def _first_token_timeout(
         raise TTFTTimeoutError(f"TTFT exceeded {budget}s budget")
 
 
-async def cascade_stream(body: dict, cascade: List[ModelConfig]) -> AsyncIterator[bytes]:
+async def cascade_stream(
+    body: dict,
+    cascade: List[ModelConfig],
+    request_headers: dict = None,
+) -> AsyncIterator[bytes]:
     """
     Try each model in cascade order, yielding a streaming response
     from the first model that responds within its TTFT budget.
+
+    request_headers: forwarded from the original client request so auth
+    (API key, OAuth/Pro/Max bearer token) is preserved across every attempt.
     """
     original_model = body.get("model", "unknown")
 
@@ -80,7 +87,7 @@ async def cascade_stream(body: dict, cascade: List[ModelConfig]) -> AsyncIterato
         )
 
         try:
-            async for chunk in _try_model_stream(model_cfg, body, original_model):
+            async for chunk in _try_model_stream(model_cfg, body, original_model, request_headers):
                 yield chunk
             return  # success — stop cascade
 
@@ -102,13 +109,14 @@ async def _try_model_stream(
     model_cfg: ModelConfig,
     body: dict,
     original_model: str,
+    request_headers: dict = None,
 ) -> AsyncIterator[bytes]:
     """
     Attempt a single model. Yields response bytes.
     Raises TTFTTimeoutError if first token exceeds budget.
     """
     if model_cfg.provider == "anthropic":
-        async for chunk in _stream_anthropic(model_cfg, body):
+        async for chunk in _stream_anthropic(model_cfg, body, request_headers):
             yield chunk
     elif model_cfg.provider == "ollama":
         async for chunk in _stream_ollama(model_cfg, body, original_model):
