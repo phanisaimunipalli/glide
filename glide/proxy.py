@@ -1,12 +1,21 @@
 """
 FastAPI proxy server for glide.
 
-Intercepts /v1/messages and runs it through the model cascade.
-All other paths pass through to Anthropic unchanged.
+Intercepts /v1/messages (Anthropic) and /v1/chat/completions (OpenAI) and
+runs them through the model cascade. All other paths pass through to the
+upstream (Anthropic by default).
+
+Input formats accepted:
+  POST /v1/messages           — Anthropic Messages API
+  POST /v1/chat/completions   — OpenAI Chat Completions API
+
+All cascade providers yield Anthropic SSE internally. If the client sent
+an OpenAI-format request, the response is converted back to OpenAI SSE.
 """
 
 import json
 import logging
+import uuid
 from contextlib import asynccontextmanager
 
 import httpx
@@ -16,6 +25,7 @@ from fastapi.responses import StreamingResponse
 from .cascade import AllModelsFailedError, cascade_stream
 from .config import settings
 from .tracker import registry
+from .translator import normalize_to_anthropic, anthropic_sse_to_openai_sse
 
 logger = logging.getLogger("glide.proxy")
 
@@ -34,7 +44,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="glide", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="glide", version="0.2.0", lifespan=lifespan)
 
 
 @app.get("/_glide/status")
@@ -66,28 +76,50 @@ async def status():
 async def proxy(request: Request, path: str):
     body_bytes = await request.body()
 
-    if path == "v1/messages" and request.method == "POST":
-        body = json.loads(body_bytes) if body_bytes else {}
+    is_messages = path == "v1/messages" and request.method == "POST"
+    is_chat = path == "v1/chat/completions" and request.method == "POST"
+
+    if (is_messages or is_chat) and body_bytes:
+        raw_body = json.loads(body_bytes)
         cascade = settings.get_cascade()
 
-        # Extract and forward original request headers (auth passthrough).
-        # Supports: API key (x-api-key), Pro/Max plan (Authorization: Bearer),
-        # or ANTHROPIC_API_KEY env fallback.
         request_headers = _extract_headers(request)
         auth_mode = _detect_auth_mode(request_headers)
-        logger.info(f"[proxy] auth={auth_mode}")
+        logger.info(f"[proxy] path={path} auth={auth_mode}")
+
+        # Normalize to Anthropic format internally
+        body = normalize_to_anthropic(raw_body) if is_chat else raw_body
 
         try:
-            return StreamingResponse(
-                cascade_stream(body, cascade, request_headers),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "X-Accel-Buffering": "no",
-                    "X-Glide": "true",
-                    "X-Glide-Auth": auth_mode,
-                },
-            )
+            if is_chat:
+                # Client expects OpenAI SSE back
+                chat_id = f"chatcmpl-{uuid.uuid4().hex[:24]}"
+                model = body.get("model", "unknown")
+                return StreamingResponse(
+                    _wrap_as_openai_sse(
+                        cascade_stream(body, cascade, request_headers),
+                        chat_id,
+                        model,
+                    ),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                        "X-Glide": "true",
+                    },
+                )
+            else:
+                # Client expects Anthropic SSE back
+                return StreamingResponse(
+                    cascade_stream(body, cascade, request_headers),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                        "X-Glide": "true",
+                        "X-Glide-Auth": auth_mode,
+                    },
+                )
         except AllModelsFailedError:
             logger.error("[proxy] All cascade models failed")
             return Response(
@@ -103,6 +135,14 @@ async def proxy(request: Request, path: str):
             )
 
     return await passthrough(request, path, body_bytes)
+
+
+async def _wrap_as_openai_sse(anthropic_stream, chat_id: str, model: str):
+    """Translate Anthropic SSE stream → OpenAI SSE stream."""
+    async for chunk in anthropic_stream:
+        converted = anthropic_sse_to_openai_sse(chunk, chat_id, model)
+        if converted:
+            yield converted
 
 
 def _extract_headers(request: Request) -> dict:
@@ -132,9 +172,6 @@ async def passthrough(request: Request, path: str, body_bytes: bytes):
         k: v for k, v in request.headers.items()
         if k.lower() not in ("host", "content-length", "transfer-encoding")
     }
-    # Pass through original auth (x-api-key or Authorization).
-    # Supports API key users and Max plan users (OAuth session auth).
-    # Only inject ANTHROPIC_API_KEY as fallback if no auth is present.
     has_auth = "x-api-key" in headers or "authorization" in headers
     if not has_auth and settings.anthropic_api_key:
         headers["x-api-key"] = settings.anthropic_api_key

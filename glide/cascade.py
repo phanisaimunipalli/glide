@@ -10,6 +10,9 @@ Tries each model in the configured cascade in order. For each model:
 The cascade ends when:
   - A model responds within budget (success), or
   - All models are exhausted (raises AllModelsFailedError)
+
+Supported providers: anthropic, openai, google, ollama
+All providers yield Anthropic SSE bytes internally.
 """
 
 import asyncio
@@ -23,7 +26,14 @@ import httpx
 
 from .config import ModelConfig, settings
 from .tracker import registry
-from .translator import anthropic_to_ollama, stream_ollama_as_anthropic
+from .translator import (
+    anthropic_to_ollama,
+    anthropic_to_openai,
+    anthropic_to_gemini,
+    stream_ollama_as_anthropic,
+    stream_openai_as_anthropic,
+    stream_gemini_as_anthropic,
+)
 
 logger = logging.getLogger("glide.cascade")
 
@@ -65,6 +75,7 @@ async def cascade_stream(
     Try each model in cascade order, yielding a streaming response
     from the first model that responds within its TTFT budget.
 
+    body: Anthropic Messages API format (already normalized by proxy).
     request_headers: forwarded from the original client request so auth
     (API key, OAuth/Pro/Max bearer token) is preserved across every attempt.
     """
@@ -112,11 +123,17 @@ async def _try_model_stream(
     request_headers: dict = None,
 ) -> AsyncIterator[bytes]:
     """
-    Attempt a single model. Yields response bytes.
+    Attempt a single model. Yields Anthropic SSE response bytes.
     Raises TTFTTimeoutError if first token exceeds budget.
     """
     if model_cfg.provider == "anthropic":
         async for chunk in _stream_anthropic(model_cfg, body, request_headers):
+            yield chunk
+    elif model_cfg.provider == "openai":
+        async for chunk in _stream_openai(model_cfg, body, original_model, request_headers):
+            yield chunk
+    elif model_cfg.provider == "google":
+        async for chunk in _stream_google(model_cfg, body, original_model):
             yield chunk
     elif model_cfg.provider == "ollama":
         async for chunk in _stream_ollama(model_cfg, body, original_model):
@@ -130,9 +147,6 @@ async def _stream_anthropic(
 ) -> AsyncIterator[bytes]:
     patched_body = {**body, "model": model_cfg.model, "stream": True}
 
-    # Preserve original auth from the incoming request.
-    # Supports API key users AND Max plan users (OAuth session auth).
-    # Only inject ANTHROPIC_API_KEY as fallback if no auth header is present.
     headers = {
         k: v for k, v in (request_headers or {}).items()
         if k.lower() not in ("host", "content-length", "transfer-encoding")
@@ -173,6 +187,70 @@ async def _stream_anthropic(
             yield first_chunk
             async for chunk in byte_iter:
                 yield chunk
+
+
+async def _stream_openai(
+    model_cfg: ModelConfig,
+    body: dict,
+    original_model: str,
+    request_headers: dict = None,
+) -> AsyncIterator[bytes]:
+    openai_body = anthropic_to_openai(body, model_cfg.model)
+    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+    tracker = registry.get(model_cfg.model)
+
+    # Build auth headers for OpenAI
+    openai_headers = {
+        "content-type": "application/json",
+        "accept": "text/event-stream",
+    }
+    # Use OPENAI_API_KEY from settings; allow override via request header
+    forwarded = {k.lower(): v for k, v in (request_headers or {}).items()}
+    if "authorization" in forwarded and "openai" in forwarded.get("authorization", "").lower():
+        openai_headers["authorization"] = forwarded["authorization"]
+    elif settings.openai_api_key:
+        openai_headers["authorization"] = f"Bearer {settings.openai_api_key}"
+
+    gen = stream_openai_as_anthropic(
+        settings.openai_base_url, openai_body, original_model, msg_id, openai_headers
+    )
+
+    first_chunk, ttft = await _first_token_timeout(gen, model_cfg.ttft_budget)
+    tracker.record(ttft)
+    logger.info(
+        f"[cascade] {model_cfg.model} TTFT={ttft:.2f}s — streaming from OpenAI"
+    )
+
+    yield first_chunk
+    async for chunk in gen:
+        yield chunk
+
+
+async def _stream_google(
+    model_cfg: ModelConfig,
+    body: dict,
+    original_model: str,
+) -> AsyncIterator[bytes]:
+    gemini_body = anthropic_to_gemini(body)
+    msg_id = f"msg_{uuid.uuid4().hex[:24]}"
+    tracker = registry.get(model_cfg.model)
+
+    if not settings.google_api_key:
+        raise httpx.ConnectError("GOOGLE_API_KEY not set", request=None)
+
+    gen = stream_gemini_as_anthropic(
+        gemini_body, model_cfg.model, original_model, msg_id, settings.google_api_key
+    )
+
+    first_chunk, ttft = await _first_token_timeout(gen, model_cfg.ttft_budget)
+    tracker.record(ttft)
+    logger.info(
+        f"[cascade] {model_cfg.model} TTFT={ttft:.2f}s — streaming from Google Gemini"
+    )
+
+    yield first_chunk
+    async for chunk in gen:
+        yield chunk
 
 
 async def _stream_ollama(

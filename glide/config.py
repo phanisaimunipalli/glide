@@ -4,11 +4,26 @@ Configuration for glide.
 The cascade is an ordered list of models. glide tries them in order,
 moving to the next if the current exceeds its TTFT budget.
 
+Supported providers:
+  anthropic  — Anthropic Messages API (claude-*)
+  openai     — OpenAI Chat Completions API (gpt-*, o1-*, etc.)
+  google     — Google Gemini API (gemini-*)
+  ollama     — Local Ollama instance (any model)
+
 Default cascade:
   claude-opus-4-6   (4s budget)  → best quality, try first
   claude-sonnet-4-6 (5s budget)  → faster, good quality
   claude-haiku-4-5  (3s budget)  → fastest Anthropic model
   qwen2.5:14b       (no timeout) → local Ollama, always available
+
+Override via CASCADE_JSON env var to add OpenAI/Gemini/custom models.
+Example:
+  CASCADE_JSON='[
+    {"provider":"anthropic","model":"claude-opus-4-6","ttft_budget":4.0},
+    {"provider":"openai","model":"gpt-4o","ttft_budget":5.0},
+    {"provider":"google","model":"gemini-2.0-flash","ttft_budget":3.0},
+    {"provider":"ollama","model":"qwen2.5:14b","ttft_budget":null}
+  ]'
 """
 
 import json
@@ -21,7 +36,7 @@ from pydantic_settings import BaseSettings
 
 @dataclass
 class ModelConfig:
-    provider: str          # "anthropic" or "ollama"
+    provider: str          # "anthropic", "openai", "google", or "ollama"
     model: str             # model identifier
     ttft_budget: Optional[float] = None  # seconds; None = no timeout
 
@@ -38,6 +53,13 @@ class Settings(BaseSettings):
     # Anthropic
     anthropic_api_key: str = ""
     anthropic_base_url: str = "https://api.anthropic.com"
+
+    # OpenAI
+    openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com"
+
+    # Google Gemini
+    google_api_key: str = ""
 
     # Ollama
     ollama_url: str = "http://localhost:11434"

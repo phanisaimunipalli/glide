@@ -107,7 +107,33 @@ glide start
 export ANTHROPIC_BASE_URL=http://127.0.0.1:8743
 ```
 
-Works with **Claude Code**, **Cursor**, or any tool using the Anthropic Messages API.
+Works with **Claude Code**, **Cursor**, or any tool using the Anthropic Messages API **or OpenAI Chat Completions API**.
+
+---
+
+## Multi-provider cascade
+
+glide is **provider-agnostic**. Mix Anthropic, OpenAI, Gemini, and Ollama models in a single cascade — glide normalizes formats internally and routes to wherever response comes first.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...   # optional
+export OPENAI_API_KEY=sk-...          # optional
+export GOOGLE_API_KEY=AIza...         # optional
+
+export CASCADE_JSON='[
+  {"provider": "anthropic", "model": "claude-opus-4-6",      "ttft_budget": 4.0},
+  {"provider": "openai",    "model": "gpt-4o",               "ttft_budget": 5.0},
+  {"provider": "google",    "model": "gemini-2.0-flash",     "ttft_budget": 3.0},
+  {"provider": "ollama",    "model": "qwen2.5:14b",           "ttft_budget": null}
+]'
+glide start
+```
+
+**Accepted input formats:**
+- `POST /v1/messages` — Anthropic Messages API
+- `POST /v1/chat/completions` — OpenAI Chat Completions API
+
+glide detects the input format and returns the matching response format automatically.
 
 ---
 
@@ -155,7 +181,10 @@ All config via environment variables or `.env` file:
 | Variable | Default | Description |
 |---|---|---|
 | `ANTHROPIC_API_KEY` | optional | API key users only — Max plan / OAuth users omit this |
-| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Upstream endpoint |
+| `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | Anthropic upstream endpoint |
+| `OPENAI_API_KEY` | optional | Required when using `openai` provider in cascade |
+| `OPENAI_BASE_URL` | `https://api.openai.com` | OpenAI upstream endpoint |
+| `GOOGLE_API_KEY` | optional | Required when using `google` provider in cascade |
 | `OLLAMA_URL` | `http://localhost:11434` | Local Ollama instance |
 | `CASCADE_JSON` | see defaults | Custom cascade as a JSON array |
 | `PROACTIVE_SKIP` | `true` | Skip models whose p95 > budget |
