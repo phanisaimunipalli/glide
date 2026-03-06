@@ -27,16 +27,15 @@ Without glide (opus takes 12s → you wait 12s or timeout):
 Claude Code → Anthropic (opus) → 12s wait → response
 ```
 
-With glide (opus budget is 8s → switches to sonnet):
+With glide (opus TTFT budget=4s, TTT budget=10s):
 ```
-Claude Code → glide → opus (8s budget exceeded) → sonnet (2s TTFT) → response
-Total wait: ~10s instead of 12s, and you never timeout
+Claude Code → glide → opus TTFT ok, but thinking > 10s → cascade to sonnet
+Claude Code → glide → sonnet (0.3s TTFT, no thinking) → response in ~10.3s
 ```
 
 After a few slow opus responses, proactive routing kicks in:
 ```
-Claude Code → glide → skip opus (p95=11s > 8s budget) → sonnet (2s) → response
-Total wait: ~2s
+Claude Code → glide → skip opus (p95_ttt=11s > 10s budget) → sonnet directly → response in ~0.3s
 ```
 
 ## Check cascade status and latency stats
@@ -51,14 +50,22 @@ curl http://127.0.0.1:8743/_glide/status | python -m json.tool
     {
       "provider": "anthropic",
       "model": "claude-opus-4-6",
-      "ttft_budget": 8.0,
-      "latency": {"samples": 12, "p95": 11.2, "mean": 9.1}
+      "ttft_budget": 4.0,
+      "ttt_budget": 10.0,
+      "latency": {
+        "ttft": {"samples": 12, "p95": 1.2, "mean": 0.9},
+        "ttt":  {"samples": 8,  "p95": 11.2, "mean": 9.1}
+      }
     },
     {
       "provider": "anthropic",
       "model": "claude-sonnet-4-6",
       "ttft_budget": 5.0,
-      "latency": {"samples": 8, "p95": 2.3, "mean": 1.8}
+      "ttt_budget": 10.0,
+      "latency": {
+        "ttft": {"samples": 8, "p95": 0.4, "mean": 0.3},
+        "ttt":  {"samples": 0, "p95": null, "mean": null}
+      }
     }
   ]
 }

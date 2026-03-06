@@ -41,7 +41,7 @@ glide runs as a transparent proxy between your AI agent and the Anthropic API. I
 ┌─────────────────────────────────────────────────────────┐
 │                    🪂 glide proxy                        │
 │                                                         │
-│  Request → claude-opus    (budget: 8s)                  │
+│  Request → claude-opus    (TTFT: 4s, TTT: 10s)           │
 │               │                                         │
 │            slow? ──yes──► claude-sonnet (budget: 5s)   │
 │                                │                        │
@@ -69,12 +69,14 @@ No restarts. No config changes. No intervention.
 
 ## Default cascade
 
-| # | Model | TTFT Budget | Role |
-|---|---|---|---|
-| 1 | `claude-opus-4-6` | 8s | Best quality, tried first |
-| 2 | `claude-sonnet-4-6` | 5s | Fast + high quality |
-| 3 | `claude-haiku-4-5` | 3s | Fastest Anthropic model |
-| 4 | `qwen2.5:14b` (Ollama) | no limit | Local fallback, always works |
+| # | Model | TTFT Budget | TTT Budget | Role |
+|---|---|---|---|---|
+| 1 | `claude-opus-4-6` | 4s | 10s | Best quality, tried first |
+| 2 | `claude-sonnet-4-6` | 5s | 10s | Fast + high quality |
+| 3 | `claude-haiku-4-5` | 3s | — | Fastest Anthropic model |
+| 4 | `qwen2.5:14b` (Ollama) | no limit | — | Local fallback, always works |
+
+**TTFT** = time to first byte. **TTT** = time to first text token after thinking completes (only fires for models using extended thinking).
 
 ---
 
@@ -97,10 +99,10 @@ glide start
 #   🪂 glide proxy started
 #   Listening : http://127.0.0.1:8743
 #   Cascade   :
-#     1. anthropic/claude-opus-4-6    (TTFT budget: 8s)
-#     2. anthropic/claude-sonnet-4-6  (TTFT budget: 5s)
-#     3. anthropic/claude-haiku-4-5   (TTFT budget: 3s)
-#     4. ollama/qwen2.5:14b           (TTFT budget: no limit)
+#     1. anthropic/claude-opus-4-6    (TTFT: 4s, TTT: 10s)
+#     2. anthropic/claude-sonnet-4-6  (TTFT: 5s, TTT: 10s)
+#     3. anthropic/claude-haiku-4-5   (TTFT: 3s)
+#     4. ollama/qwen2.5:14b           (no limit)
 # ============================================================
 
 # 3. Point your agent at glide
@@ -240,7 +242,9 @@ Together they form the **Agentic Reliability Stack** — your AI coding agent ke
 | Outage failover | ✓ (manual) | ✓ (auto) | ✓ (via cascade) |
 | Latency-aware routing | ✗ | ✗ | ✓ |
 | TTFT budget enforcement | ✗ | ✗ | ✓ |
+| TTT budget (thinking timeout) | ✗ | ✗ | ✓ |
 | Proactive p95 routing | ✗ | ✗ | ✓ |
+| Multi-provider cascade | ✓ (static) | ✗ | ✓ (dynamic) |
 | Zero config change | ✗ | ✓ | ✓ |
 
 ---
