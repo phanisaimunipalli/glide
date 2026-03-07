@@ -94,6 +94,14 @@ export CASCADE_JSON='[
 glide start
 ```
 
+## Prometheus metrics
+
+```bash
+curl http://127.0.0.1:8743/metrics
+```
+
+Key counters: `glide_requests_total`, `glide_hedge_decision_total{decision}`, `glide_hedge_winner_total{model}`, `glide_ttft_p95_seconds{model}`.
+
 ## Use with llm-circuit (recommended)
 
 Run both for full coverage — cascade handles slowness, circuit breaker handles outages:

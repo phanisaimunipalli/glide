@@ -9,7 +9,7 @@
 [![PyPI version](https://img.shields.io/pypi/v/glide.svg?style=flat-square)](https://pypi.org/project/glide/)
 [![Python](https://img.shields.io/pypi/pyversions/glide.svg?style=flat-square)](https://pypi.org/project/glide/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](https://opensource.org/licenses/MIT)
-[![Tests](https://img.shields.io/badge/tests-13%20passing-brightgreen?style=flat-square)]()
+[![Tests](https://img.shields.io/badge/tests-22%20passing-brightgreen?style=flat-square)]()
 
 ```bash
 pip install glide
@@ -53,7 +53,7 @@ glide runs as a transparent proxy between your AI agent and the Anthropic API. I
 └─────────────────────────────────────────────────────────┘
 ```
 
-### The smart part: proactive routing
+### The smart part: proactive routing + request hedging
 
 glide tracks a **rolling p95 TTFT** per model. If opus is consistently slow, glide skips it without waiting — routing directly to sonnet before the timeout even starts.
 
@@ -64,6 +64,14 @@ Recovery      → opus p95=3s   → resumes automatically
 ```
 
 No restarts. No config changes. No intervention.
+
+When the primary model is *borderline* slow (p95 approaching its budget), glide uses **request hedging** — it fires both opus and sonnet simultaneously and streams whichever responds first, then cancels the loser. Three outcomes based on observed p95:
+
+| Decision | Condition | Action |
+|---|---|---|
+| **SOLO** | opus p95 < 80% of budget | Fire only opus — it's healthy |
+| **HEDGE** | opus risky, sonnet healthy/cold | Fire both, race, stream winner |
+| **SKIP** | both risky | Skip hedge, go straight to sequential cascade |
 
 ---
 
@@ -135,6 +143,24 @@ Add to your code_puppy model config:
 ```bash
 glide status
 ```
+
+### Prometheus metrics
+
+```bash
+curl http://127.0.0.1:8743/metrics
+```
+
+```
+glide_requests_total 42.0
+glide_hedge_decision_total{decision="solo"} 30.0
+glide_hedge_decision_total{decision="hedge"} 10.0
+glide_hedge_decision_total{decision="skip"} 2.0
+glide_hedge_winner_total{model="claude-sonnet-4-6"} 8.0
+glide_ttft_p95_seconds{model="claude-opus-4-6"} 3.82
+glide_ttft_p95_seconds{model="claude-sonnet-4-6"} 0.41
+```
+
+Plug directly into Grafana or Prometheus — no extra config needed.
 
 ```
 glide  http://127.0.0.1:8743
@@ -285,7 +311,11 @@ Together they form the **Agentic Reliability Stack** — your AI coding agent ke
 | TTFT budget enforcement | ✗ | ✗ | ✓ |
 | TTT budget (thinking timeout) | ✗ | ✗ | ✓ |
 | Proactive p95 routing | ✗ | ✗ | ✓ |
+| Request hedging (race models) | ✗ | ✗ | ✓ |
+| Smart hedge trigger (solo/hedge/skip) | ✗ | ✗ | ✓ |
 | Multi-provider cascade | ✓ (static) | ✗ | ✓ (dynamic) |
+| Prometheus metrics | ✗ | ✗ | ✓ |
+| SQLite persistence | ✗ | ✗ | ✓ |
 | Zero config change | ✗ | ✓ | ✓ |
 
 ---
@@ -296,7 +326,7 @@ Together they form the **Agentic Reliability Stack** — your AI coding agent ke
 git clone https://github.com/phanisaimunipalli/glide
 cd glide
 pip install -e ".[dev]"
-pytest tests/ -v   # 13 tests, all passing
+pytest tests/ -v   # 22 tests, all passing
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for areas where help is needed.

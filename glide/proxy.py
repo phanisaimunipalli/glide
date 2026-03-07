@@ -27,6 +27,7 @@ from .config import settings
 from .tracker import registry
 from .translator import normalize_to_anthropic, anthropic_sse_to_openai_sse
 from .store import get_store
+from .metrics import metrics
 
 logger = logging.getLogger("glide.proxy")
 
@@ -56,6 +57,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="glide", version="0.2.0", lifespan=lifespan)
+
+
+@app.get("/metrics", response_class=Response)
+async def prometheus_metrics():
+    """Prometheus text format metrics — plug into Grafana or scrape directly."""
+    return Response(
+        content=metrics.render(registry),
+        media_type="text/plain; version=0.0.4; charset=utf-8",
+    )
 
 
 @app.get("/_glide/status")

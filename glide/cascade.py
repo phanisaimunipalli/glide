@@ -36,6 +36,7 @@ import httpx
 
 from .config import ModelConfig, settings
 from .tracker import registry
+from .metrics import metrics
 from .translator import (
     anthropic_to_ollama,
     anthropic_to_openai,
@@ -200,6 +201,7 @@ async def hedge_stream(
 
     losers = [m.model for m in models if m.model != winner_cfg.model]
     registry.get(winner_cfg.model).record_ttft(winner_ttft)
+    metrics.record_hedge_winner(winner_cfg.model)
     logger.info(
         f"[hedge] Winner: {winner_cfg.provider}/{winner_cfg.model} "
         f"TTFT={winner_ttft:.3f}s — cancelled: {', '.join(losers)}"
@@ -282,12 +284,14 @@ async def cascade_stream(
     (API key, OAuth/Pro/Max bearer token) is preserved across every attempt.
     """
     original_model = body.get("model", "unknown")
+    metrics.record_request()
 
     # Phase 1: Smart hedge decision
     hedge_n = settings.hedge_top
     if hedge_n >= 2 and len(cascade) >= 2:
         hedge_models = cascade[:hedge_n]
         decision = _hedge_decision(hedge_models)
+        metrics.record_hedge_decision(decision)
 
         if decision == "hedge":
             remaining = cascade[hedge_n:]
@@ -300,14 +304,13 @@ async def cascade_stream(
                     yield chunk
                 return  # hedge succeeded
             except AllModelsFailedError:
+                metrics.record_cascade_fallback()
                 logger.warning("[cascade] Hedge failed — falling through to sequential")
 
         elif decision == "solo":
-            # Model 1 is healthy — let sequential cascade handle it (tries model 1 first)
             remaining = cascade
 
         else:  # "skip"
-            # Both hedge models risky — go straight to sequential (proactive skip filters them)
             remaining = cascade
 
     else:

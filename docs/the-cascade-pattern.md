@@ -105,6 +105,59 @@ The LLM Request Cascade Pattern introduces **proactive routing**: a rolling wind
 
 This means the cascade learns from history. After a period of opus slowness, the proxy stops wasting time attempting it and routes directly to sonnet, delivering responses within the sonnet budget rather than the opus budget plus wait time.
 
+### Request Hedging
+
+Proactive routing handles the sustained-load case. But when a model is *borderline* slow — p95 is elevated but not yet above budget — pure sequential cascading still exposes the user to tail latency on individual requests.
+
+The LLM Request Cascade Pattern extends the Tail-at-Scale hedging idea (Dean & Barroso, 2013) to heterogeneous model tiers: **broadcast the same request to the primary model and a backup simultaneously, stream whichever responds first, cancel the loser**.
+
+#### Smart Hedge Trigger
+
+To avoid always doubling API costs, the proxy computes a routing decision before each request using the observed p95 per model:
+
+| Decision | Condition | Action |
+|---|---|---|
+| **SOLO** | primary p95 < 80% of budget | Send to primary only — it's healthy |
+| **HEDGE** | primary risky, backup healthy or cold | Fire both, race on a shared asyncio queue, stream winner |
+| **SKIP** | both primary and backup risky | Skip the hedge entirely, fall through to sequential cascade |
+
+The 80% threshold provides a safety margin: hedging activates while the primary is trending slow but before it has actually started failing its budget on individual requests.
+
+#### Hedge Implementation
+
+```
+Request arrives → _hedge_decision() → "hedge"
+      │
+      ├── Task A: fire opus  ───────────────────────┐
+      │                                             │ asyncio.Queue
+      └── Task B: fire sonnet ────────────────────► │
+                                                    ▼
+                                            First chunk arrives
+                                                    │
+                                            Cancel losing task
+                                                    │
+                                            Stream winner to client
+```
+
+Task cancellation propagates through httpx's `async with client.stream()` context manager, closing the HTTP connection and releasing the upstream resource immediately.
+
+### Observability
+
+The proxy exposes a `/metrics` endpoint in Prometheus text format. Key signals:
+
+- `glide_requests_total` — total requests handled
+- `glide_hedge_decision_total{decision}` — solo / hedge / skip decision distribution
+- `glide_hedge_winner_total{model}` — which model won each hedge race
+- `glide_cascade_fallback_total` — hedge failures that fell through to sequential cascade
+- `glide_ttft_p95_seconds{model}` — rolling p95 TTFT per model
+- `glide_ttt_p95_seconds{model}` — rolling p95 TTT per model
+
+```bash
+curl http://127.0.0.1:8743/metrics
+```
+
+These signals allow operators to track how often each routing path fires and identify when model performance is degrading — without waiting for user-visible timeouts.
+
 ---
 
 ## Relation to Prior Art
