@@ -44,21 +44,42 @@ def cmd_status(args):
 
     print(f"\nglide  http://{settings.proxy_host}:{settings.proxy_port}")
     auth = data.get("auth", {})
-    print(f"auth   {auth.get('note', '?')}\n")
+    print(f"auth   {auth.get('note', '?')}")
+    store_info = data.get("store", {})
+    if store_info.get("available"):
+        print(f"store  {store_info.get('path')}  ({store_info.get('total_samples', 0)} samples on disk)")
+    else:
+        print(f"store  disabled")
+    print()
 
     cascade = data.get("cascade", [])
-    print(f"{'#':<3} {'provider/model':<38} {'TTFT budget':>12} {'TTT budget':>10}  {'p95 TTFT':>9}  {'p95 TTT':>8}")
-    print("-" * 90)
+    print(f"{'#':<3} {'provider/model':<38} {'TTFT budget':>12} {'TTT budget':>10}  {'p95 TTFT (n)':>14}  {'p95 TTT (n)':>13}")
+    print("-" * 100)
     for i, m in enumerate(cascade, 1):
         ttft_b = f"{m['ttft_budget']}s" if m['ttft_budget'] else "no limit"
         ttt_b  = f"{m.get('ttt_budget')}s" if m.get('ttt_budget') else "—"
         lat    = m.get("latency", {})
         ttft_s = lat.get("ttft", {})
         ttt_s  = lat.get("ttt", {})
-        p95_ttft = f"{ttft_s['p95']:.2f}s" if ttft_s.get("p95") else "no data"
-        p95_ttt  = f"{ttt_s['p95']:.2f}s"  if ttt_s.get("p95")  else "no data"
+
+        n_ttft = ttft_s.get("samples", 0)
+        n_ttt  = ttt_s.get("samples", 0)
+        if ttft_s.get("p95"):
+            p95_ttft = f"{ttft_s['p95']:.2f}s ({n_ttft})"
+        elif n_ttft:
+            p95_ttft = f"warming ({n_ttft}/5)"
+        else:
+            p95_ttft = "no data"
+
+        if ttt_s.get("p95"):
+            p95_ttt = f"{ttt_s['p95']:.2f}s ({n_ttt})"
+        elif n_ttt:
+            p95_ttt = f"warming ({n_ttt}/5)"
+        else:
+            p95_ttt = "—"
+
         label = f"{m['provider']}/{m['model']}"
-        print(f"{i:<3} {label:<38} {ttft_b:>12} {ttt_b:>10}  {p95_ttft:>9}  {p95_ttt:>8}")
+        print(f"{i:<3} {label:<38} {ttft_b:>12} {ttt_b:>10}  {p95_ttft:>14}  {p95_ttt:>13}")
     print()
 
 

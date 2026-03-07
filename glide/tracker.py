@@ -11,6 +11,9 @@ Tracks two signals per model:
 
 Both use a rolling window of recent samples to compute p95. Proactive routing
 skips a model if its p95 TTFT already exceeds the configured budget.
+
+Samples are persisted to SQLite via glide/store.py so the rolling window
+survives proxy restarts — no warm-up period needed.
 """
 
 import logging
@@ -25,9 +28,30 @@ logger = logging.getLogger("glide.tracker")
 class ModelLatencyTracker:
     """Tracks TTFT and TTT samples for a single model."""
 
-    def __init__(self, window_size: int = 20):
+    def __init__(self, model: str, window_size: int = 20):
+        self._model = model
+        self._window = window_size
         self._ttft: deque = deque(maxlen=window_size)
         self._ttt: deque = deque(maxlen=window_size)
+        self._load_from_store()
+
+    def _load_from_store(self):
+        if not settings.db_path:
+            return
+        try:
+            from .store import get_store
+            store = get_store()
+            for v in store.load(self._model, "ttft", self._window):
+                self._ttft.append(v)
+            for v in store.load(self._model, "ttt", self._window):
+                self._ttt.append(v)
+            if self._ttft or self._ttt:
+                logger.info(
+                    f"[tracker] {self._model}: loaded "
+                    f"{len(self._ttft)} TTFT + {len(self._ttt)} TTT samples from disk"
+                )
+        except Exception as e:
+            logger.warning(f"[tracker] could not load from store: {e}")
 
     # ------------------------------------------------------------------
     # Record
@@ -39,10 +63,21 @@ class ModelLatencyTracker:
     def record_ttft(self, v: float):
         self._ttft.append(v)
         logger.debug(f"Recorded TTFT {v:.2f}s (window={len(self._ttft)})")
+        self._persist("ttft", v)
 
     def record_ttt(self, v: float):
         self._ttt.append(v)
         logger.debug(f"Recorded TTT  {v:.2f}s (window={len(self._ttt)})")
+        self._persist("ttt", v)
+
+    def _persist(self, signal: str, v: float):
+        if not settings.db_path:
+            return
+        try:
+            from .store import get_store
+            get_store().append(self._model, signal, v, self._window)
+        except Exception as e:
+            logger.warning(f"[tracker] persist failed: {e}")
 
     # ------------------------------------------------------------------
     # TTFT stats
@@ -52,10 +87,6 @@ class ModelLatencyTracker:
         return _p95(self._ttft)
 
     def should_skip(self, ttft_budget: Optional[float]) -> bool:
-        """
-        Returns True if this model's p95 TTFT exceeds the budget,
-        meaning it will likely timeout again — skip it proactively.
-        """
         if not settings.proactive_skip or ttft_budget is None:
             return False
         p = self.p95()
@@ -74,10 +105,6 @@ class ModelLatencyTracker:
         return _p95(self._ttt)
 
     def should_skip_ttt(self, ttt_budget: Optional[float]) -> bool:
-        """
-        Returns True if this model's p95 TTT exceeds the ttt_budget.
-        Used for proactive routing when thinking is consistently too slow.
-        """
         if not settings.proactive_skip or ttt_budget is None:
             return False
         p = self.ttt_p95()
@@ -136,7 +163,8 @@ class TrackerRegistry:
     def get(self, model: str) -> ModelLatencyTracker:
         if model not in self._trackers:
             self._trackers[model] = ModelLatencyTracker(
-                window_size=settings.tracker_window
+                model=model,
+                window_size=settings.tracker_window,
             )
         return self._trackers[model]
 

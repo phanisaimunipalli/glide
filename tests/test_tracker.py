@@ -3,12 +3,18 @@ Tests for the per-model latency tracker.
 """
 
 import pytest
+from unittest.mock import patch
 from glide.tracker import ModelLatencyTracker
 
 
 @pytest.fixture
 def tracker():
-    return ModelLatencyTracker(window_size=10)
+    # Disable persistence so tests don't pick up samples from a real DB
+    with patch("glide.config.settings") as mock_settings:
+        mock_settings.db_path = ""
+        mock_settings.proactive_skip = True
+        mock_settings.tracker_window = 20
+        yield ModelLatencyTracker(model="test-model", window_size=10)
 
 
 def test_initial_state(tracker):

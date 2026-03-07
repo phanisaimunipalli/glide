@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     tracker_window: int = 20   # rolling window size for p95 calculation
     proactive_skip: bool = True  # skip models whose p95 TTFT > budget
 
+    # Persistence
+    db_path: str = "~/.glide/latency.db"  # SQLite path; set to "" to disable
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

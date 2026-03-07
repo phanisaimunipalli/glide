@@ -26,6 +26,7 @@ from .cascade import AllModelsFailedError, cascade_stream
 from .config import settings
 from .tracker import registry
 from .translator import normalize_to_anthropic, anthropic_sse_to_openai_sse
+from .store import get_store
 
 logger = logging.getLogger("glide.proxy")
 
@@ -33,13 +34,23 @@ logger = logging.getLogger("glide.proxy")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     cascade = settings.get_cascade()
+
+    # Pre-warm trackers so DB samples are loaded before the first request
+    for m in cascade:
+        registry.get(m.model)
+
     logger.info("=" * 60)
     logger.info("  glide proxy started")
     logger.info(f"  Listening : http://{settings.proxy_host}:{settings.proxy_port}")
     logger.info(f"  Cascade   :")
     for i, m in enumerate(cascade):
-        budget = f"{m.ttft_budget}s" if m.ttft_budget else "no limit"
-        logger.info(f"    {i+1}. {m.provider}/{m.model} (TTFT budget: {budget})")
+        ttft = f"{m.ttft_budget}s" if m.ttft_budget else "no limit"
+        ttt  = f"TTT:{m.ttt_budget}s" if m.ttt_budget else ""
+        logger.info(f"    {i+1}. {m.provider}/{m.model} (TTFT:{ttft} {ttt})")
+    if settings.db_path:
+        store = get_store()
+        if store.available:
+            logger.info(f"  Store     : {store.path} ({store.total_samples()} samples)")
     logger.info("=" * 60)
     yield
 
@@ -52,7 +63,13 @@ async def status():
     """Inspect cascade configuration and per-model latency stats."""
     cascade = settings.get_cascade()
     env_key_set = bool(settings.anthropic_api_key)
+    store = get_store() if settings.db_path else None
     return {
+        "store": {
+            "available": store.available if store else False,
+            "path": store.path if store else None,
+            "total_samples": store.total_samples() if store else 0,
+        },
         "auth": {
             "env_api_key_set": env_key_set,
             "note": (
