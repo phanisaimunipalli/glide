@@ -1,21 +1,24 @@
 """
-Model cascade orchestrator.
+Model cascade + hedge orchestrator.
 
-Tries each model in the configured cascade in order. For each model:
-  1. Check if p95 TTFT or p95 TTT already exceeds budget (proactive skip)
-  2. Send the request and measure time-to-first-token (TTFT)
-  3. If TTFT exceeds budget → record, skip to next model
-  4. If model has extended thinking, parse SSE events and measure TTT
-  5. If TTT exceeds ttt_budget → record, abort stream, skip to next model
-  6. If request succeeds → record TTFT + TTT, stream response
+Two routing strategies, used together:
+
+HEDGE (top N models, simultaneous):
+  Broadcasts the same request to the top `hedge_top` cascade models at once.
+  Whichever returns its first byte first wins — all others are cancelled.
+  This is the LLM application of Google's "Tail at Scale" request hedging.
+  Eliminates p95 tail latency: if one model is slow, the other wins.
+
+CASCADE (remaining models, sequential):
+  If all hedged models fail, falls through to the remaining cascade models
+  tried one at a time with TTFT + TTT budget enforcement.
 
 TTFT = time to first byte. Catches slow starts and connection issues.
 TTT  = time from request start until the first *text* content block begins,
-       i.e. after any thinking/reasoning tokens complete. Only fires for
-       models with extended thinking. For regular models TTT is never tracked.
+       after any thinking/reasoning tokens. Only enforced in sequential cascade.
 
 The cascade ends when:
-  - A model responds within budget (success), or
+  - A hedged or sequential model responds (success), or
   - All models are exhausted (raises AllModelsFailedError)
 
 Supported providers: anthropic, openai, google, ollama
@@ -27,7 +30,7 @@ import json
 import logging
 import time
 import uuid
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, Dict, List, Optional
 
 import httpx
 
@@ -107,6 +110,112 @@ async def _first_token_timeout(
         raise TTFTTimeoutError(f"TTFT exceeded {budget}s budget")
 
 
+async def hedge_stream(
+    body: dict,
+    models: List[ModelConfig],
+    original_model: str,
+    request_headers: dict = None,
+) -> AsyncIterator[bytes]:
+    """
+    Broadcast request to all models simultaneously.
+    Stream from whichever produces its first byte fastest.
+    Cancel all losers immediately upon winner selection.
+
+    Uses no per-model TTFT/TTT budgets — the race itself is the timeout
+    (bounded by the maximum ttft_budget across hedged models).
+    TTT is not enforced for the winner; once a model wins the race it
+    streams its full response uninterrupted.
+    """
+    n = len(models)
+    request_start = time.monotonic()
+
+    # Pre-create one unbounded queue per model for chunk streaming
+    chunk_queues: Dict[str, asyncio.Queue] = {m.model: asyncio.Queue() for m in models}
+
+    # race_q receives (model_cfg, ttft) on first byte, or None on failure
+    race_q: asyncio.Queue = asyncio.Queue()
+    winner_event = asyncio.Event()
+
+    async def run_model(model_cfg: ModelConfig):
+        q = chunk_queues[model_cfg.model]
+        announced = False
+        # Strip budgets — hedge race is the only timeout
+        unbudgeted = ModelConfig(
+            provider=model_cfg.provider,
+            model=model_cfg.model,
+            ttft_budget=None,
+            ttt_budget=None,
+        )
+        try:
+            async for chunk in _try_model_stream(unbudgeted, body, original_model, request_headers):
+                await q.put(chunk)
+                if not announced:
+                    announced = True
+                    if not winner_event.is_set():
+                        winner_event.set()
+                        ttft = time.monotonic() - request_start
+                        await race_q.put((model_cfg, ttft))
+                    else:
+                        # Another model already won — stop streaming to free resources
+                        return
+        except asyncio.CancelledError:
+            pass  # cancelled as a loser — expected
+        except Exception:
+            if not announced:
+                await race_q.put(None)  # signal this model failed the race
+        finally:
+            await q.put(None)  # sentinel: stream complete
+
+    tasks = {m.model: asyncio.create_task(run_model(m)) for m in models}
+
+    # Race: collect results until we have a winner or all have failed
+    max_budget = max((m.ttft_budget or 30.0) for m in models)
+    winner_cfg: Optional[ModelConfig] = None
+    winner_ttft: Optional[float] = None
+    fails = 0
+
+    while winner_cfg is None:
+        try:
+            result = await asyncio.wait_for(race_q.get(), timeout=max_budget)
+        except asyncio.TimeoutError:
+            logger.warning(f"[hedge] All {n} models timed out ({max_budget}s)")
+            break
+
+        if result is None:
+            fails += 1
+            if fails >= n:
+                logger.warning(f"[hedge] All {n} models failed")
+                break
+        else:
+            winner_cfg, winner_ttft = result
+
+    # Cancel all losers (and all tasks if no winner)
+    for model_name, task in tasks.items():
+        if winner_cfg is None or model_name != winner_cfg.model:
+            task.cancel()
+
+    if winner_cfg is None:
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
+        raise AllModelsFailedError("All hedged models failed")
+
+    losers = [m.model for m in models if m.model != winner_cfg.model]
+    registry.get(winner_cfg.model).record_ttft(winner_ttft)
+    logger.info(
+        f"[hedge] Winner: {winner_cfg.provider}/{winner_cfg.model} "
+        f"TTFT={winner_ttft:.3f}s — cancelled: {', '.join(losers)}"
+    )
+
+    # Stream winner's buffered + remaining chunks
+    winner_q = chunk_queues[winner_cfg.model]
+    while True:
+        item = await winner_q.get()
+        if item is None:
+            break
+        yield item
+
+    await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+
 async def cascade_stream(
     body: dict,
     cascade: List[ModelConfig],
@@ -122,7 +231,26 @@ async def cascade_stream(
     """
     original_model = body.get("model", "unknown")
 
-    for model_cfg in cascade:
+    # Phase 1: Hedge — broadcast to top N models simultaneously
+    hedge_n = settings.hedge_top
+    if hedge_n >= 2 and len(cascade) >= 2:
+        hedge_models = cascade[:hedge_n]
+        remaining = cascade[hedge_n:]
+        logger.info(
+            f"[cascade] Hedging top {hedge_n}: "
+            + ", ".join(f"{m.provider}/{m.model}" for m in hedge_models)
+        )
+        try:
+            async for chunk in hedge_stream(body, hedge_models, original_model, request_headers):
+                yield chunk
+            return  # hedge succeeded
+        except AllModelsFailedError:
+            logger.warning(f"[cascade] Hedge failed — falling through to sequential cascade")
+    else:
+        remaining = cascade
+
+    # Phase 2: Sequential cascade with TTFT + TTT budgets
+    for model_cfg in remaining:
         tracker = registry.get(model_cfg.model)
 
         # Proactive skip: if p95 TTFT or p95 TTT already exceeds budget

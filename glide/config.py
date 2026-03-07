@@ -85,6 +85,9 @@ class Settings(BaseSettings):
     tracker_window: int = 20   # rolling window size for p95 calculation
     proactive_skip: bool = True  # skip models whose p95 TTFT > budget
 
+    # Hedging — broadcast to top N models simultaneously, stream the fastest
+    hedge_top: int = 2  # set to 1 to disable (sequential cascade only)
+
     # Persistence
     db_path: str = "~/.glide/latency.db"  # SQLite path; set to "" to disable
 
