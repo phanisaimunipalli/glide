@@ -216,14 +216,66 @@ async def hedge_stream(
     await asyncio.gather(*tasks.values(), return_exceptions=True)
 
 
+def _hedge_decision(hedge_models: List[ModelConfig]) -> str:
+    """
+    Decide whether to hedge, go solo, or skip to sequential.
+
+    Returns one of:
+      "hedge" — broadcast top N simultaneously (model 1 is risky or cold)
+      "solo"  — model 1 is healthy; send it alone, no extra cost
+      "skip"  — all hedge models are risky; skip straight to sequential cascade
+
+    Healthy = p95_ttft < budget * 0.8  (20% margin before the deadline)
+    Cold    = fewer than 5 samples (we don't know yet → hedge conservatively)
+    Risky   = p95_ttft >= budget * 0.8
+    """
+    first = hedge_models[0]
+    t1 = registry.get(first.model)
+    p95_1 = t1.p95()
+    budget_1 = first.ttft_budget or 30.0
+
+    # Cold start — hedge conservatively until we have data
+    if p95_1 is None:
+        logger.debug(f"[hedge-decision] {first.model} cold → hedge")
+        return "hedge"
+
+    healthy_threshold = budget_1 * 0.8
+
+    # Model 1 comfortably within budget — no hedge needed
+    if p95_1 < healthy_threshold:
+        logger.info(
+            f"[hedge-decision] {first.model} healthy "
+            f"(p95={p95_1:.2f}s < {healthy_threshold:.2f}s threshold) → solo"
+        )
+        return "solo"
+
+    # Model 1 is risky — check if model 2 is also risky
+    if len(hedge_models) > 1:
+        second = hedge_models[1]
+        t2 = registry.get(second.model)
+        p95_2 = t2.p95()
+        budget_2 = second.ttft_budget or 30.0
+
+        if p95_2 is not None and p95_2 >= budget_2 * 0.8:
+            logger.info(
+                f"[hedge-decision] both risky "
+                f"({first.model} p95={p95_1:.2f}s, {second.model} p95={p95_2:.2f}s) → skip to sequential"
+            )
+            return "skip"
+
+    logger.info(
+        f"[hedge-decision] {first.model} risky (p95={p95_1:.2f}s ≥ {healthy_threshold:.2f}s) → hedge"
+    )
+    return "hedge"
+
+
 async def cascade_stream(
     body: dict,
     cascade: List[ModelConfig],
     request_headers: dict = None,
 ) -> AsyncIterator[bytes]:
     """
-    Try each model in cascade order, yielding a streaming response
-    from the first model that responds within its TTFT budget.
+    Route each request through hedge → sequential cascade.
 
     body: Anthropic Messages API format (already normalized by proxy).
     request_headers: forwarded from the original client request so auth
@@ -231,21 +283,33 @@ async def cascade_stream(
     """
     original_model = body.get("model", "unknown")
 
-    # Phase 1: Hedge — broadcast to top N models simultaneously
+    # Phase 1: Smart hedge decision
     hedge_n = settings.hedge_top
     if hedge_n >= 2 and len(cascade) >= 2:
         hedge_models = cascade[:hedge_n]
-        remaining = cascade[hedge_n:]
-        logger.info(
-            f"[cascade] Hedging top {hedge_n}: "
-            + ", ".join(f"{m.provider}/{m.model}" for m in hedge_models)
-        )
-        try:
-            async for chunk in hedge_stream(body, hedge_models, original_model, request_headers):
-                yield chunk
-            return  # hedge succeeded
-        except AllModelsFailedError:
-            logger.warning(f"[cascade] Hedge failed — falling through to sequential cascade")
+        decision = _hedge_decision(hedge_models)
+
+        if decision == "hedge":
+            remaining = cascade[hedge_n:]
+            logger.info(
+                "[cascade] Hedging: "
+                + " vs ".join(f"{m.provider}/{m.model}" for m in hedge_models)
+            )
+            try:
+                async for chunk in hedge_stream(body, hedge_models, original_model, request_headers):
+                    yield chunk
+                return  # hedge succeeded
+            except AllModelsFailedError:
+                logger.warning("[cascade] Hedge failed — falling through to sequential")
+
+        elif decision == "solo":
+            # Model 1 is healthy — let sequential cascade handle it (tries model 1 first)
+            remaining = cascade
+
+        else:  # "skip"
+            # Both hedge models risky — go straight to sequential (proactive skip filters them)
+            remaining = cascade
+
     else:
         remaining = cascade
 
